@@ -14,7 +14,7 @@
  */
 
 #include <JuceHeader.h>
-#include "DriftableParameter.h"
+
 
 
 #define TAU MathConstants<float>::twoPi
@@ -106,11 +106,11 @@ public:
     }
 };
 
-//inline std::unique_ptr<AudioParameterFloat> param(const String& id, const String& name, float low, float hi) {
-//    auto interval = pow(10, int(log10((hi - low) / 256)));
-//    std::cout << "Parameter " << name << " low " << low << " high " << hi << "interval" << interval << "\n";
-//    return std::make_unique<AudioParameterFloat>(id, name, NormalisableRange<float>(low, hi, interval), (low+hi)/2);
-//}
+inline std::unique_ptr<AudioParameterFloat> param(const String& id, const String& name, float low, float hi) {
+    auto interval = pow(10, int(log10((hi - low) / 256)));
+    std::cout << "Parameter " << name << " low " << low << " high " << hi << "interval" << interval << "\n";
+    return std::make_unique<AudioParameterFloat>(id, name, NormalisableRange<float>(low, hi, interval), (low+hi)/2);
+}
 
 std::unique_ptr<AudioProcessorParameterGroup> wanderable(const String& id, const String& name, float low, float hi) {
     return std::make_unique<AudioProcessorParameterGroup>(
@@ -123,17 +123,23 @@ std::unique_ptr<AudioProcessorParameterGroup> wanderable(const String& id, const
 
 class WanderController {
 private:
+
+    AudioProcessorValueTreeState &state;
+    float currentValue;
+    float range;
+public:
     WanderingParameter p;
     String centreId;
     String driftId;
-    AudioProcessorValueTreeState &state;
-    float currentValue;
-public:
+    String name;
+
     WanderController(float range, const String &idPrefix, AudioProcessorValueTreeState &state):
     p(-range,range,1/400.0f),
     centreId(idPrefix + "_centre"),
     driftId(idPrefix + "_wander"),
-    state(state) {
+    state(state),
+    range(range),
+    name(idPrefix) {
         currentValue = *state.getRawParameterValue(centreId);
     }
 
@@ -148,13 +154,37 @@ public:
         return currentValue;
     }
 
+    float centre() {
+        return float(state.getParameterAsValue(centreId).getValue());
+    }
+
+    float driftMin() {
+        auto centreRange = state.getParameterRange(centreId);
+        return centreRange.snapToLegalValue(centre() - range * float(state.getParameterAsValue(driftId).getValue()));
+    }
+
+    float driftMax() {
+        auto centreRange = state.getParameterRange(centreId);
+        return centreRange.snapToLegalValue(centre() + range * float(state.getParameterAsValue(driftId).getValue()));
+    }
+
+    float min() {
+        return state.getParameterRange(centreId).start;
+    }
+
+    float max() {
+        return state.getParameterRange(centreId).end;
+    }
+
 };
 
 class ParameterHandler {
 private:
     AudioProcessorValueTreeState state;
-    WanderController cutoffW,envmodW,resonanceW,decayW;
+
 public:
+    WanderController cutoffW,envmodW,resonanceW,decayW;
+
     ParameterHandler(AudioProcessor &proc):
     state(proc, nullptr, "state", {
         wanderable("cutoff", "Cutoff", 30, 800),
@@ -333,8 +363,8 @@ public:
     }
 
     // Change these to add an editor
-    bool hasEditor() const override { return false; }
-    juce::AudioProcessorEditor* createEditor() override { return nullptr; }
+    bool hasEditor() const override { return true; }
+    juce::AudioProcessorEditor* createEditor() override;
 
     const String getName() const override { return "FreeOhFree";}
     bool acceptsMidi() const override {return true;}
@@ -370,4 +400,130 @@ public:
 AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
     return new FreeOhFreePluginProcessor();
+}
+
+
+class WanderParameterIndicator : public Component, Timer {
+    WanderController& ctrl;
+public:
+    WanderParameterIndicator(WanderController & ctrl): ctrl(ctrl) {
+        startTimerHz(10);
+    }
+
+    void paint(Graphics &g) override {
+        g.setColour(Colours::black);
+        g.fillRect(0,0,getWidth(), getHeight());
+
+        auto min = ctrl.min();
+        auto max = ctrl.max();
+
+        auto scaledValue = (ctrl.value() - min) / (max - min);
+        auto scaledCentre = (ctrl.centre() - min) / (max - min);
+        auto scaledDriftMin = (ctrl.driftMin() - min) / (max - min);
+        auto scaledDriftMax = (ctrl.driftMax() - min) / (max - min);
+
+        g.setColour(Colour::fromRGBA(32,32,255,100));
+        g.fillRect(0.0f, (1-scaledDriftMax) * float(getHeight()), float(getWidth()), (scaledDriftMax - scaledDriftMin) * float(getHeight()));
+
+        g.setColour(Colour::fromRGBA(32,32,255,200));
+        g.fillRect(0.0f, (1-scaledDriftMin) * float(getHeight()), float(getWidth()), 2.0f);
+        g.fillRect(0.0f, (1-scaledDriftMax) * float(getHeight()), float(getWidth()), 2.0f);
+
+        g.setColour(Colours::yellow.withAlpha(0.7f));
+        g.fillRect(0.0f, (1-scaledCentre) * float(getHeight()), float(getWidth()), 2.0f);
+
+        g.setColour(Colours::white);
+        g.fillRect(0.0f, (1-scaledValue) * float(getHeight()), float(getWidth()), 2.0f);
+
+    }
+
+    void timerCallback() override {
+        repaint();
+    }
+
+};
+
+class WanderParameterEditor: public Component{
+private:
+    Slider centreSlider;
+    Slider driftSlider;
+    Label centreLabel;
+    Label driftLabel;
+    AudioProcessorValueTreeState::SliderAttachment centreAttachment;
+    AudioProcessorValueTreeState::SliderAttachment driftAttachment;
+    WanderParameterIndicator indicator;
+    WanderController& controller;
+public:
+    WanderParameterEditor(AudioProcessorValueTreeState &state, WanderController & controller):
+        centreSlider(Slider::RotaryHorizontalVerticalDrag, Slider::NoTextBox),
+        driftSlider(Slider::RotaryHorizontalVerticalDrag, Slider::NoTextBox),
+        centreAttachment(state, controller.centreId, centreSlider),
+        driftAttachment(state, controller.driftId, driftSlider),
+        indicator(controller),
+        controller(controller)
+    {
+        centreLabel.setText(controller.name + " centre", NotificationType::dontSendNotification);
+        centreLabel.setJustificationType(Justification::centred);
+        driftLabel.setText(controller.name + " drift", NotificationType::dontSendNotification);
+        driftLabel.setJustificationType(Justification::centred);
+
+        addAndMakeVisible(centreSlider);
+        addAndMakeVisible(driftSlider);
+        addAndMakeVisible(centreLabel);
+        addAndMakeVisible(driftLabel);
+        addAndMakeVisible(indicator);
+        resized();
+    }
+
+    void resized() override {
+        auto w = getWidth();
+        auto h = getHeight();
+        auto labelSize = 40;
+
+        centreSlider.setBounds(0,0,w/2,h/2 - labelSize);
+        centreLabel.setBounds(0,h/2-labelSize,w/2,labelSize);
+
+        driftSlider.setBounds(0,h/2,w/2,h/2 - labelSize);
+        driftLabel.setBounds(0,h-labelSize,w/2,labelSize);
+
+        indicator.setBounds(w/2,0,w/2,h);
+    }
+
+};
+
+
+class FreeOhFreeEditor: public AudioProcessorEditor {
+private:
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(FreeOhFreeEditor)
+    ParameterHandler& params;
+    FreeOhFreePluginProcessor& processor;
+
+    WanderParameterEditor cutoff;
+    WanderParameterEditor envMod;
+    WanderParameterEditor decay;
+    WanderParameterEditor resonance;
+
+public:
+    explicit FreeOhFreeEditor(FreeOhFreePluginProcessor &processor, ParameterHandler &params):
+        AudioProcessorEditor(processor),
+        processor(processor),
+        params(params),
+        cutoff(params.getState(), params.cutoffW),
+        envMod(params.getState(), params.envmodW),
+        decay(params.getState(), params.decayW),
+        resonance(params.getState(), params.resonanceW) {
+        setSize(400, 400);
+        cutoff.setBounds(0,0,200,200);
+        resonance.setBounds(200,0,200,200);
+        decay.setBounds(0,200,200,200);
+        envMod.setBounds(200,200,200,200);
+        addAndMakeVisible(cutoff);
+        addAndMakeVisible(resonance);
+        addAndMakeVisible(decay);
+        addAndMakeVisible(envMod);
+    }
+};
+
+juce::AudioProcessorEditor * FreeOhFreePluginProcessor::createEditor() {
+    return new FreeOhFreeEditor(*this, params);
 }
