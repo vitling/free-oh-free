@@ -58,4 +58,5 @@ target_compile_definitions(FreeOhFreePlugin
         JUCE_DISPLAY_SPLASH_SCREEN=0)
 
 target_link_libraries(FreeOhFreePlugin PRIVATE
-        juce::juce_audio_utils)
+        juce::juce_audio_utils
+        juce::juce_dsp)
