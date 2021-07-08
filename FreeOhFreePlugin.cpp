@@ -101,6 +101,10 @@ public:
         return value;
     }
 
+    void setRate(double scaleFactor) {
+        scale = scaleFactor * (max - min);
+    }
+
     double get() {
         return value;
     }
@@ -118,7 +122,8 @@ std::unique_ptr<AudioProcessorParameterGroup> wanderable(const String& id, const
             name,
             "---",
             param(id + "_centre", name, low, hi),
-            param(id + "_wander", name + " Drift", 0, 1));
+            param(id + "_wander", name + " Drift", 0, 1),
+            param(id + "_rate", name + " Rate", 1/1000.0f, 1/40.0f));
 }
 
 class WanderController {
@@ -131,12 +136,14 @@ public:
     WanderingParameter p;
     String centreId;
     String driftId;
+    String rateId;
     String name;
 
     WanderController(float range, const String &idPrefix, AudioProcessorValueTreeState &state):
     p(-range,range,1/400.0f),
     centreId(idPrefix + "_centre"),
     driftId(idPrefix + "_wander"),
+    rateId(idPrefix + "_rate"),
     state(state),
     range(range),
     name(idPrefix) {
@@ -144,6 +151,7 @@ public:
     }
 
     void step() {
+        p.setRate(float(state.getParameterAsValue(rateId).getValue()));
         auto centreRange = state.getParameterRange(centreId);
         auto centre = float(state.getParameterAsValue(centreId).getValue());
         auto drift = p.step() * float(state.getParameterAsValue(driftId).getValue());
@@ -413,6 +421,8 @@ public:
     void paint(Graphics &g) override {
         g.setColour(Colours::black);
         g.fillRect(0,0,getWidth(), getHeight());
+        g.setColour(Colours::white);
+        g.drawRect(0,0,getWidth(), getHeight(),1);
 
         auto min = ctrl.min();
         auto max = ctrl.max();
@@ -449,16 +459,21 @@ private:
     Slider driftSlider;
     Label centreLabel;
     Label driftLabel;
+    Slider rateSlider;
+    Label rateLabel;
     AudioProcessorValueTreeState::SliderAttachment centreAttachment;
     AudioProcessorValueTreeState::SliderAttachment driftAttachment;
+    AudioProcessorValueTreeState::SliderAttachment rateAttachment;
     WanderParameterIndicator indicator;
     WanderController& controller;
 public:
     WanderParameterEditor(AudioProcessorValueTreeState &state, WanderController & controller):
         centreSlider(Slider::RotaryHorizontalVerticalDrag, Slider::NoTextBox),
         driftSlider(Slider::RotaryHorizontalVerticalDrag, Slider::NoTextBox),
+        rateSlider(Slider::RotaryHorizontalVerticalDrag, Slider::NoTextBox),
         centreAttachment(state, controller.centreId, centreSlider),
         driftAttachment(state, controller.driftId, driftSlider),
+        rateAttachment(state, controller.rateId, rateSlider),
         indicator(controller),
         controller(controller)
     {
@@ -466,11 +481,15 @@ public:
         centreLabel.setJustificationType(Justification::centred);
         driftLabel.setText(controller.name + " drift", NotificationType::dontSendNotification);
         driftLabel.setJustificationType(Justification::centred);
+        rateLabel.setText(controller.name + " rate", NotificationType::dontSendNotification);
+        rateLabel.setJustificationType(Justification::centred);
 
         addAndMakeVisible(centreSlider);
         addAndMakeVisible(driftSlider);
+        addAndMakeVisible(rateSlider);
         addAndMakeVisible(centreLabel);
         addAndMakeVisible(driftLabel);
+        addAndMakeVisible(rateLabel);
         addAndMakeVisible(indicator);
         resized();
     }
@@ -478,13 +497,17 @@ public:
     void resized() override {
         auto w = getWidth();
         auto h = getHeight();
-        auto labelSize = 40;
+        auto labelSize = 30;
+        auto nControls = 3;
 
-        centreSlider.setBounds(0,0,w/2,h/2 - labelSize);
-        centreLabel.setBounds(0,h/2-labelSize,w/2,labelSize);
+        centreSlider.setBounds(0,0,w/2,h/nControls - labelSize);
+        centreLabel.setBounds(0,h/nControls-labelSize,w/2,labelSize);
 
-        driftSlider.setBounds(0,h/2,w/2,h/2 - labelSize);
-        driftLabel.setBounds(0,h-labelSize,w/2,labelSize);
+        driftSlider.setBounds(0,h/nControls,w/2,h/nControls - labelSize);
+        driftLabel.setBounds(0,2 * (h/nControls)-labelSize,w/2,labelSize);
+
+        rateSlider.setBounds(0,2 * h/nControls,w/2,h/nControls - labelSize);
+        rateLabel.setBounds(0,3 * (h/nControls)-labelSize,w/2,labelSize);
 
         indicator.setBounds(w/2,0,w/2,h);
     }
@@ -512,11 +535,11 @@ public:
         envMod(params.getState(), params.envmodW),
         decay(params.getState(), params.decayW),
         resonance(params.getState(), params.resonanceW) {
-        setSize(400, 400);
-        cutoff.setBounds(0,0,200,200);
-        resonance.setBounds(200,0,200,200);
-        decay.setBounds(0,200,200,200);
-        envMod.setBounds(200,200,200,200);
+        setSize(400, 600);
+        cutoff.setBounds(0,0,200,300);
+        resonance.setBounds(200,0,200,300);
+        decay.setBounds(0,300,200,300);
+        envMod.setBounds(200,300,200,300);
         addAndMakeVisible(cutoff);
         addAndMakeVisible(resonance);
         addAndMakeVisible(decay);
